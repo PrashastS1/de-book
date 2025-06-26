@@ -139,11 +139,16 @@ func runCLI(ctx context.Context, node host.Host, topic *pubsub.Topic, privKey cr
 				continue
 			}
 
+			bcMutex.Lock()
+
 			if !isBlockValid(newBlock, Blockchain[len(Blockchain)-1]) {
 				fmt.Println("Generated an invalid block. Something is wrong.")
+				bcMutex.Unlock() // Don't forget to unlock on error!
 				continue
 			}
+			// Blockchain = append(Blockchain, newBlock)
 			Blockchain = append(Blockchain, newBlock)
+			bcMutex.Unlock()
 			fmt.Println("New block added to our local ledger.")
 
 			// 4. Publish the block to the network
@@ -183,10 +188,17 @@ func runCLI(ctx context.Context, node host.Host, topic *pubsub.Topic, privKey cr
 		case "view":
 			fmt.Println("--- Current State from Ledger ---")
 			// This is a simple state reconstruction. A real app would cache this.
+			bcMutex.Lock()
+
+			chainCopy := make([]Block, len(Blockchain))
+			copy(chainCopy, Blockchain)
+			
+			bcMutex.Unlock()
+
 			bookOwnership := make(map[string]peer.ID) // Key: ISBN, Value: Owner Peer ID
 
 			// Iterate over the blockchain to find the latest owner of each book
-			for _, block := range Blockchain {
+			for _, block := range chainCopy {
 				if block.Index == 0 { continue } // Skip Genesis
 
 				var tx Transaction

@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"time"
 
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
@@ -43,6 +45,45 @@ func setupDiscoveryAndPubSub(ctx context.Context, node host.Host, kadDHT *dht.Ip
 	return topic, nil
 }
 
+// func readFromTopic(ctx context.Context, node host.Host, topic *pubsub.Topic) {
+// 	sub, err := topic.Subscribe()
+// 	if err != nil {
+// 		fmt.Println("Error subscribing to topic:", err)
+// 		return
+// 	}
+// 	defer sub.Cancel()
+
+// 	for {
+// 		msg, err := sub.Next(ctx)
+// 		if err != nil { return }
+
+// 		if msg.ReceivedFrom == node.ID() { continue }
+
+// 		// Unmarshal the data into a Block
+// 		var newBlock Block
+// 		if err := json.Unmarshal(msg.Data, &newBlock); err != nil {
+// 			fmt.Println("Error unmarshaling block data:", err)
+// 			continue
+// 		}
+
+// 		// *** THE CRITICAL VALIDATION STEP ***
+// 		// We could lock the blockchain here to prevent race conditions
+// 		// For now, we'll keep it simple.
+// 		lastBlock := Blockchain[len(Blockchain)-1]
+// 		if isBlockValid(newBlock, lastBlock) {
+// 			Blockchain = append(Blockchain, newBlock)
+// 			fmt.Printf("\n--- Valid New Block Received ---\n")
+// 			fmt.Printf("From: %s\n", msg.ReceivedFrom.ShortString())
+// 			fmt.Printf("Data: %s\n", newBlock.Data)
+// 			fmt.Printf("Appended to local ledger. Chain length: %d\n", len(Blockchain))
+// 			fmt.Printf("------------------------------\n> ")
+// 		} else {
+// 			fmt.Println("Received an invalid block. Discarding.")
+// 		}
+// 	}
+// }
+
+// readFromTopic now uses a temporary struct for unmarshaling.
 func readFromTopic(ctx context.Context, node host.Host, topic *pubsub.Topic) {
 	sub, err := topic.Subscribe()
 	if err != nil {
@@ -54,21 +95,60 @@ func readFromTopic(ctx context.Context, node host.Host, topic *pubsub.Topic) {
 	for {
 		msg, err := sub.Next(ctx)
 		if err != nil { return }
-
 		if msg.ReceivedFrom == node.ID() { continue }
 
-		// Unmarshal the data into a Block
-		var newBlock Block
-		if err := json.Unmarshal(msg.Data, &newBlock); err != nil {
-			fmt.Println("Error unmarshaling block data:", err)
+		// Define the temporary struct for JSON decoding
+		type jsonBlock struct {
+			Index     int    `json:"Index"`
+			Timestamp string `json:"Timestamp"`
+			Data      string `json:"Data"`
+			PrevHash  string `json:"PrevHash"`
+			Hash      string `json:"Hash"`
+			// --- THE FIX IS HERE: Expect strings, not byte slices ---
+			Signature     string `json:"Signature"`
+			CreatorPubKey string `json:"CreatorPubKey"`
+		}
+
+		// 1. Unmarshal into the temporary struct with string fields
+		var jb jsonBlock
+		if err := json.Unmarshal(msg.Data, &jb); err != nil {
+			fmt.Println("Error unmarshaling jsonBlock data:", err)
 			continue
 		}
 
-		// *** THE CRITICAL VALIDATION STEP ***
-		// We could lock the blockchain here to prevent race conditions
-		// For now, we'll keep it simple.
-		lastBlock := Blockchain[len(Blockchain)-1]
-		if isBlockValid(newBlock, lastBlock) {
+		// 2. Base64-decode the strings back into byte slices
+		sigBytes, err := base64.StdEncoding.DecodeString(jb.Signature)
+		if err != nil {
+			fmt.Println("Error decoding signature:", err)
+			continue
+		}
+		pubKeyBytes, err := base64.StdEncoding.DecodeString(jb.CreatorPubKey)
+		if err != nil {
+			fmt.Println("Error decoding public key:", err)
+			continue
+		}
+		
+		// 3. Convert the raw public key bytes back into a crypto.PubKey object
+		pubKey, err := crypto.UnmarshalPublicKey(pubKeyBytes)
+		if err != nil {
+			fmt.Println("Error unmarshaling public key:", err)
+			continue
+		}
+		
+		// 4. Manually construct the real Block
+		newBlock := Block{
+			Index:         jb.Index,
+			Timestamp:     jb.Timestamp,
+			Data:          jb.Data,
+			PrevHash:      jb.PrevHash,
+			Hash:          jb.Hash,
+			Signature:     sigBytes, // Use the decoded byte slice
+			CreatorPubKey: pubKey,
+		}
+
+		// Validation step with mutex remains the same
+		bcMutex.Lock()
+		if isBlockValid(newBlock, Blockchain[len(Blockchain)-1]) {
 			Blockchain = append(Blockchain, newBlock)
 			fmt.Printf("\n--- Valid New Block Received ---\n")
 			fmt.Printf("From: %s\n", msg.ReceivedFrom.ShortString())
@@ -78,6 +158,7 @@ func readFromTopic(ctx context.Context, node host.Host, topic *pubsub.Topic) {
 		} else {
 			fmt.Println("Received an invalid block. Discarding.")
 		}
+		bcMutex.Unlock()
 	}
 }
 

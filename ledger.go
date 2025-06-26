@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+	"sync"
 
 	"github.com/libp2p/go-libp2p/core/crypto"
 )
@@ -20,6 +21,9 @@ type Block struct {
 	Signature []byte
 	CreatorPubKey crypto.PubKey
 }
+
+var Blockchain []Block
+var bcMutex = &sync.Mutex{}
 
 // calculateHash creates a SHA256 hash of a Block.
 func (b *Block) calculateHash() string {
@@ -44,7 +48,6 @@ func (b *Block) signBlock(privKey crypto.PrivKey) error {
 
 // verifySignature checks if the block's signature is valid.
 func (b *Block) verifySignature() (bool, error) {
-	// Re-get the public key from the private key if needed, or ensure it's set
 	if b.CreatorPubKey == nil {
 		return false, fmt.Errorf("public key is nil")
 	}
@@ -74,10 +77,7 @@ func isBlockValid(newBlock, oldBlock Block) bool {
 	return true
 }
 
-var Blockchain []Block
-
 func createGenesisBlock() {
-	// The genesis block isn't signed as it's the root of trust.
 	genesisBlock := Block{
 		Index:     0,
 		Timestamp: time.Now().String(),
@@ -89,8 +89,11 @@ func createGenesisBlock() {
 }
 
 func generateBlock(privKey crypto.PrivKey, transaction Transaction) (Block, error) {
+	// We need to lock here because we are reading the last block
+	bcMutex.Lock()
 	oldBlock := Blockchain[len(Blockchain)-1]
-	
+	bcMutex.Unlock()
+
 	txBytes, err := json.Marshal(transaction)
 	if err != nil {
 		return Block{}, err
@@ -104,7 +107,6 @@ func generateBlock(privKey crypto.PrivKey, transaction Transaction) (Block, erro
 	}
 	newBlock.Hash = newBlock.calculateHash()
 	
-	// Sign the block with the user's private key
 	if err := newBlock.signBlock(privKey); err != nil {
 		return Block{}, err
 	}
