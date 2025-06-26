@@ -1,0 +1,13 @@
+# Binary files
+de-book
+de-book.exe
+
+# Identity keys - these are user-specific and should NEVER be committed
+*.key
+
+# Test peer directories
+/de-book-peer2/
+
+# Go module cache
+/vendor/
+go.sum
