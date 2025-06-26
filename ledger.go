@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -13,19 +14,12 @@ import (
 type Block struct {
 	Index     int
 	Timestamp string
-	// The actual data being stored. For now, a simple string.
-	// We'll make this more structured later.
 	Data      string 
 	PrevHash  string
 	Hash      string
-	// The signature proves who created this block.
 	Signature []byte
-	// The public key of the creator.
 	CreatorPubKey crypto.PubKey
 }
-
-// Blockchain is a series of validated Blocks.
-var Blockchain []Block
 
 // calculateHash creates a SHA256 hash of a Block.
 func (b *Block) calculateHash() string {
@@ -50,6 +44,10 @@ func (b *Block) signBlock(privKey crypto.PrivKey) error {
 
 // verifySignature checks if the block's signature is valid.
 func (b *Block) verifySignature() (bool, error) {
+	// Re-get the public key from the private key if needed, or ensure it's set
+	if b.CreatorPubKey == nil {
+		return false, fmt.Errorf("public key is nil")
+	}
 	hash := b.calculateHash()
 	return b.CreatorPubKey.Verify([]byte(hash), b.Signature)
 }
@@ -57,24 +55,29 @@ func (b *Block) verifySignature() (bool, error) {
 // isBlockValid checks if a new block is valid to be added to the chain.
 func isBlockValid(newBlock, oldBlock Block) bool {
 	if oldBlock.Index+1 != newBlock.Index {
+		fmt.Println("Invalid index")
 		return false
 	}
 	if oldBlock.Hash != newBlock.PrevHash {
+		fmt.Println("Invalid previous hash")
 		return false
 	}
 	if newBlock.calculateHash() != newBlock.Hash {
+		fmt.Println("Invalid hash")
 		return false
 	}
-	// Verify the signature
 	valid, err := newBlock.verifySignature()
 	if err != nil || !valid {
+		fmt.Printf("Invalid signature: %v\n", err)
 		return false
 	}
 	return true
 }
 
-// createGenesisBlock creates the very first block in the chain.
+var Blockchain []Block
+
 func createGenesisBlock() {
+	// The genesis block isn't signed as it's the root of trust.
 	genesisBlock := Block{
 		Index:     0,
 		Timestamp: time.Now().String(),
@@ -83,4 +86,28 @@ func createGenesisBlock() {
 	}
 	genesisBlock.Hash = genesisBlock.calculateHash()
 	Blockchain = append(Blockchain, genesisBlock)
+}
+
+func generateBlock(privKey crypto.PrivKey, transaction Transaction) (Block, error) {
+	oldBlock := Blockchain[len(Blockchain)-1]
+	
+	txBytes, err := json.Marshal(transaction)
+	if err != nil {
+		return Block{}, err
+	}
+
+	newBlock := Block{
+		Index:     oldBlock.Index + 1,
+		Timestamp: time.Now().String(),
+		Data:      string(txBytes),
+		PrevHash:  oldBlock.Hash,
+	}
+	newBlock.Hash = newBlock.calculateHash()
+	
+	// Sign the block with the user's private key
+	if err := newBlock.signBlock(privKey); err != nil {
+		return Block{}, err
+	}
+
+	return newBlock, nil
 }
