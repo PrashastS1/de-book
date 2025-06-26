@@ -2,15 +2,16 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/host"
-	// "github.com/libp2p/go-libp2p/core/peer" <-- This is now unused, as pointed out by the compiler! Let's remove it.
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/libp2p/go-libp2p/p2p/discovery/util"
+	// "github.com/libp2p/go-libp2p/core/peer"
 )
 
 // ... (constants and bookRegistry are the same) ...
@@ -32,21 +33,16 @@ func setupDiscoveryAndPubSub(ctx context.Context, node host.Host, kadDHT *dht.Ip
 
 	// 3. Start a goroutine to read messages from the topic
 	// --- MODIFICATION HERE ---
-	go readFromTopic(ctx, node, topic) // Pass the 'node' object
+	go readFromTopic(ctx, node, topic)
+	go findPeers(ctx, node, routing.NewRoutingDiscovery(kadDHT))
 
 	// 4. Set up peer discovery
-	routingDiscovery := routing.NewRoutingDiscovery(kadDHT)
-	util.Advertise(ctx, routingDiscovery, DiscoveryTag)
+	util.Advertise(ctx, routing.NewRoutingDiscovery(kadDHT), DiscoveryTag)
 	fmt.Println("Successfully advertised our presence on the network!")
-
-	// 5. Start a goroutine to find other peers
-	go findPeers(ctx, node, routingDiscovery)
 
 	return topic, nil
 }
 
-// readFromTopic continuously reads messages from the pubsub topic and processes them.
-// --- MODIFICATION HERE ---
 func readFromTopic(ctx context.Context, node host.Host, topic *pubsub.Topic) {
 	sub, err := topic.Subscribe()
 	if err != nil {
@@ -57,29 +53,31 @@ func readFromTopic(ctx context.Context, node host.Host, topic *pubsub.Topic) {
 
 	for {
 		msg, err := sub.Next(ctx)
-		if err != nil {
-			return
-		}
+		if err != nil { return }
 
-		// Don't process our own messages
-		// --- MODIFICATION HERE ---
-		if msg.ReceivedFrom == node.ID() { // Use the passed-in node's ID
+		if msg.ReceivedFrom == node.ID() { continue }
+
+		// Unmarshal the data into a Block
+		var newBlock Block
+		if err := json.Unmarshal(msg.Data, &newBlock); err != nil {
+			fmt.Println("Error unmarshaling block data:", err)
 			continue
 		}
 
-		var book Book
-		if err := book.Unmarshal(msg.Data); err != nil {
-			fmt.Println("Error unmarshaling book data:", err)
-			continue
+		// *** THE CRITICAL VALIDATION STEP ***
+		// We could lock the blockchain here to prevent race conditions
+		// For now, we'll keep it simple.
+		lastBlock := Blockchain[len(Blockchain)-1]
+		if isBlockValid(newBlock, lastBlock) {
+			Blockchain = append(Blockchain, newBlock)
+			fmt.Printf("\n--- Valid New Block Received ---\n")
+			fmt.Printf("From: %s\n", msg.ReceivedFrom.ShortString())
+			fmt.Printf("Data: %s\n", newBlock.Data)
+			fmt.Printf("Appended to local ledger. Chain length: %d\n", len(Blockchain))
+			fmt.Printf("------------------------------\n> ")
+		} else {
+			fmt.Println("Received an invalid block. Discarding.")
 		}
-
-		registryKey := fmt.Sprintf("%s:%s", book.Owner.String(), book.ISBN)
-		bookRegistry[registryKey] = book
-
-		fmt.Printf("\n--- New Book Received ---\n")
-		fmt.Printf("From: %s\n", msg.ReceivedFrom.ShortString())
-		fmt.Printf("Title: %s, Author: %s, ISBN: %s\n", book.Title, book.Author, book.ISBN)
-		fmt.Printf("-------------------------\n> ")
 	}
 }
 
