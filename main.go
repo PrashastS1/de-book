@@ -3,20 +3,21 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
-	"encoding/json"
 
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
-
+const DeBookTopic = "/de-book/1.0.0"
+const DiscoveryTag = "de-book-discovery"
 const identityPath = "identity.key"
 
 func main() {
@@ -64,7 +65,9 @@ func main() {
 
 	// --- Setup Discovery and PubSub ---
 	topic, err := setupDiscoveryAndPubSub(ctx, node, kadDHT)
-	if err != nil { panic(err) }
+	if err != nil {
+		panic(err)
+	}
 
 	// --- Run the CLI ---
 	go runCLI(ctx, node, topic, privKey)
@@ -83,7 +86,6 @@ func main() {
 // runCLI provides a simple command-line interface for the user.
 func runCLI(ctx context.Context, node host.Host, topic *pubsub.Topic, privKey crypto.PrivKey) {
 	reader := bufio.NewReader(os.Stdin)
-	// A small delay to allow the network setup to complete before showing the prompt
 	time.Sleep(2 * time.Second)
 
 	for {
@@ -141,39 +143,69 @@ func runCLI(ctx context.Context, node host.Host, topic *pubsub.Topic, privKey cr
 
 			bcMutex.Lock()
 
-			if !isBlockValid(newBlock, Blockchain[len(Blockchain)-1]) {
+			if isBlockValid(newBlock, Blockchain[len(Blockchain)-1]) {
+				Blockchain = append(Blockchain, newBlock)
+			} else {
 				fmt.Println("Generated an invalid block. Something is wrong.")
-				bcMutex.Unlock() // Don't forget to unlock on error!
+				bcMutex.Unlock()
 				continue
 			}
-			// Blockchain = append(Blockchain, newBlock)
-			Blockchain = append(Blockchain, newBlock)
 			bcMutex.Unlock()
 			fmt.Println("New block added to our local ledger.")
 
-			// 4. Publish the block to the network
-			blockBytes, err := json.Marshal(newBlock)
+			serializable, err := newBlock.toSerializable()
 			if err != nil {
-				fmt.Println("Error marshaling block:", err)
+				fmt.Println("Error converting block for serialization:", err)
 				continue
 			}
-			if err := topic.Publish(ctx, blockBytes); err != nil {
-				fmt.Println("Error publishing block:", err)
-				continue
-			}
-			fmt.Println("Block published to the network!")
 
-			// // Marshal the book data to JSON and publish it on the topic
-			// bookBytes, err := book.Marshal()
+			payloadBytes, err := json.Marshal(serializable)
+			if err != nil {
+				fmt.Println("Error marshaling payload:", err)
+				continue
+			}
+
+			msg := Message{
+				Type:    MsgTypeAnnounceBlock,
+				Payload: payloadBytes,
+			}
+
+			msgBytes, err := msg.Marshal()
+
+			if err != nil {
+				fmt.Println("Error marshaling final message:", err)
+				continue
+			}
+
+			if err := topic.Publish(ctx, msgBytes); err != nil {
+				fmt.Println("Error publishing message:", err)
+				continue
+			}
+			fmt.Println("Block announcement published to the network!")
+
+			// // 4. Publish the block to the network
+			// blockBytes, err := json.Marshal(serializable)
 			// if err != nil {
-			// 	fmt.Println("Error marshaling book:", err)
+			// 	fmt.Println("Error marshaling block:", err)
 			// 	continue
 			// }
-			// if err := topic.Publish(ctx, bookBytes); err != nil {
-			// 	fmt.Println("Error publishing book:", err)
+			// if err := topic.Publish(ctx, blockBytes); err != nil {
+			// 	fmt.Println("Error publishing block:", err)
 			// 	continue
 			// }
-			// fmt.Println("Book published to the network!")
+			// fmt.Println("Block published to the network!")
+
+			// // // Marshal the book data to JSON and publish it on the topic
+			// // bookBytes, err := book.Marshal()
+			// // if err != nil {
+			// // 	fmt.Println("Error marshaling book:", err)
+			// // 	continue
+			// // }
+			// // if err := topic.Publish(ctx, bookBytes); err != nil {
+			// // 	fmt.Println("Error publishing book:", err)
+			// // 	continue
+			// // }
+			// // fmt.Println("Book published to the network!")
 
 		// case "view":
 		// 	fmt.Println("--- Local Book Registry ---")

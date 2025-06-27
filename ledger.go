@@ -5,21 +5,110 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"time"
 	"sync"
+	"time"
 
 	"github.com/libp2p/go-libp2p/core/crypto"
 )
 
 // Block represents a single entry in our ledger (a "transaction").
 type Block struct {
-	Index     int
-	Timestamp string
-	Data      string 
-	PrevHash  string
-	Hash      string
-	Signature []byte
+	Index         int
+	Timestamp     string
+	Data          string
+	PrevHash      string
+	Hash          string
+	Signature     []byte
 	CreatorPubKey crypto.PubKey
+}
+
+type SerializableBlock struct {
+	Index         int    `json:"Index"`
+	Timestamp     string `json:"Timestamp"`
+	Data          string `json:"Data"`
+	PrevHash      string `json:"PrevHash"`
+	Hash          string `json:"Hash"`
+	Signature     []byte `json:"Signature"`     // json handles []byte by base64-encoding it
+	CreatorPubKey []byte `json:"CreatorPubKey"` // We will store the raw bytes of the public key
+}
+
+// func (b *Block) toSerializable() (SerializableBlock, error) {
+// 	pubKeyBytes, err := crypto.MarshalPublicKey(b.CreatorPubKey)
+// 	if err != nil {
+// 		return SerializableBlock{}, err
+// 	}
+// 	return SerializableBlock{
+// 		Index:         b.Index,
+// 		Timestamp:     b.Timestamp,
+// 		Data:          b.Data,
+// 		PrevHash:      b.PrevHash,
+// 		Hash:          b.Hash,
+// 		Signature:     b.Signature,
+// 		CreatorPubKey: pubKeyBytes,
+// 	}, nil
+// }
+
+func (b *Block) toSerializable() (SerializableBlock, error) {
+    // --- THE FIX IS HERE ---
+	// Handle the Genesis Block, which has no public key.
+	var pubKeyBytes []byte
+	var err error
+	if b.CreatorPubKey != nil {
+		pubKeyBytes, err = crypto.MarshalPublicKey(b.CreatorPubKey)
+		if err != nil {
+			return SerializableBlock{}, err
+		}
+	}
+
+	return SerializableBlock{
+		Index:         b.Index,
+		Timestamp:     b.Timestamp,
+		Data:          b.Data,
+		PrevHash:      b.PrevHash,
+		Hash:          b.Hash,
+		Signature:     b.Signature,
+		CreatorPubKey: pubKeyBytes, // This will be nil for the Genesis Block, which is fine.
+	}, nil
+}
+
+// func (sb *SerializableBlock) toBlock() (Block, error) {
+// 	pubKey, err := crypto.UnmarshalPublicKey(sb.CreatorPubKey)
+// 	if err != nil {
+// 		return Block{}, err
+// 	}
+// 	return Block{
+// 		Index:         sb.Index,
+// 		Timestamp:     sb.Timestamp,
+// 		Data:          sb.Data,
+// 		PrevHash:      sb.PrevHash,
+// 		Hash:          sb.Hash,
+// 		Signature:     sb.Signature,
+// 		CreatorPubKey: pubKey,
+// 	}, nil
+// }
+
+// fromSerializable converts a simple, serializable block back to a rich Block.
+func (sb *SerializableBlock) toBlock() (Block, error) {
+    // --- ADD A NIL CHECK HERE TOO ---
+	var pubKey crypto.PubKey
+	var err error
+	// Only unmarshal if the key bytes are not nil.
+	if sb.CreatorPubKey != nil {
+		pubKey, err = crypto.UnmarshalPublicKey(sb.CreatorPubKey)
+		if err != nil {
+			return Block{}, err
+		}
+	}
+
+	return Block{
+		Index:         sb.Index,
+		Timestamp:     sb.Timestamp,
+		Data:          sb.Data,
+		PrevHash:      sb.PrevHash,
+		Hash:          sb.Hash,
+		Signature:     sb.Signature,
+		CreatorPubKey: pubKey, // Will be nil for Genesis Block.
+	}, nil
 }
 
 var Blockchain []Block
@@ -69,27 +158,48 @@ func isBlockValid(newBlock, oldBlock Block) bool {
 		fmt.Println("Invalid hash")
 		return false
 	}
-	valid, err := newBlock.verifySignature()
-	if err != nil || !valid {
-		fmt.Printf("Invalid signature: %v\n", err)
-		return false
+
+	if newBlock.Index > 0 {
+		valid, err := newBlock.verifySignature()
+		if err != nil || !valid {
+			fmt.Printf("Invalid signature on block %d: %v\n", newBlock.Index, err)
+			return false
+		}
 	}
+
 	return true
+	// valid, err := newBlock.verifySignature()
+	// if err != nil || !valid {
+	// 	fmt.Printf("Invalid signature: %v\n", err)
+	// 	return false
+	// }
+	// return true
 }
+
+// func createGenesisBlock() {
+// 	genesisBlock := Block{
+// 		Index:     0,
+// 		Timestamp: time.Now().String(),
+// 		Data:      "Genesis Block",
+// 		PrevHash:  "",
+// 	}
+// 	genesisBlock.Hash = genesisBlock.calculateHash()
+// 	Blockchain = append(Blockchain, genesisBlock)
+// }
 
 func createGenesisBlock() {
 	genesisBlock := Block{
 		Index:     0,
-		Timestamp: time.Now().String(),
+		Timestamp: "2023-01-01T00:00:00Z", // A fixed timestamp
 		Data:      "Genesis Block",
 		PrevHash:  "",
+		// Signature and CreatorPubKey are nil, correctly representing the root.
 	}
 	genesisBlock.Hash = genesisBlock.calculateHash()
 	Blockchain = append(Blockchain, genesisBlock)
 }
 
 func generateBlock(privKey crypto.PrivKey, transaction Transaction) (Block, error) {
-	// We need to lock here because we are reading the last block
 	bcMutex.Lock()
 	oldBlock := Blockchain[len(Blockchain)-1]
 	bcMutex.Unlock()
@@ -112,4 +222,42 @@ func generateBlock(privKey crypto.PrivKey, transaction Transaction) (Block, erro
 	}
 
 	return newBlock, nil
+}
+
+// func isChainValid(chain []Block) bool {
+// 	// The first block must be a genesis block (simplified check)
+// 	if chain[0].Index != 0 {
+// 		return false
+// 	}
+// 	// Validate every subsequent block in the chain
+// 	for i := 1; i < len(chain); i++ {
+// 		if !isBlockValid(chain[i], chain[i-1]) {
+// 			return false
+// 		}
+// 	}
+// 	return true
+// }
+
+func isChainValid(chain []Block) bool {
+	// The first block must be a genesis block (check its hash)
+	// Let's create a temporary one to get the expected hash.
+	expectedGenesis := Block{
+		Index:     0,
+		Timestamp: "2023-01-01T00:00:00Z",
+		Data:      "Genesis Block",
+		PrevHash:  "",
+	}
+	expectedGenesis.Hash = expectedGenesis.calculateHash()
+
+	if chain[0].Hash != expectedGenesis.Hash {
+		fmt.Println("Invalid Genesis Block in received chain.")
+		return false
+	}
+    // ... rest of the function is the same ...
+	for i := 1; i < len(chain); i++ {
+		if !isBlockValid(chain[i], chain[i-1]) {
+			return false
+		}
+	}
+	return true
 }
