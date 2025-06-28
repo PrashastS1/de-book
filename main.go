@@ -206,66 +206,6 @@ func runCLI(ctx context.Context, node host.Host, topic *pubsub.Topic, privKey cr
 				}
 
 			case "view":
-				// var b strings.Builder
-				// b.WriteString("\n--- Ledger State ---\n")
-
-				// bcMutex.Lock()
-				// chainCopy := make([]Block, len(Blockchain))
-				// copy(chainCopy, Blockchain)
-				// bcMutex.Unlock()
-
-				// bookRegistry := make(map[string]Book)
-				// bookOwnership := make(map[string]peer.ID)
-				// pendingProposals := make(map[string]TradeProposal)
-
-				// for _, block := range chainCopy {
-				// 	if block.Index == 0 { continue }
-				// 	var tx Transaction
-				// 	if err := json.Unmarshal([]byte(block.Data), &tx); err != nil { continue }
-				// 	if block.CreatorPubKey == nil { continue }
-				// 	creatorID, err := peer.IDFromPublicKey(block.CreatorPubKey)
-				// 	if err != nil { continue }
-				// 	switch tx.Type {
-				// 	case "REGISTER_BOOK":
-				// 		bookRegistry[tx.Book.ISBN] = tx.Book
-				// 		bookOwnership[tx.Book.ISBN] = creatorID
-				// 	case "PROPOSE_TRADE":
-				// 		pendingProposals[tx.Trade.ProposalID] = tx.Trade
-				// 	case "CONFIRM_TRADE":
-				// 		proposal, exists := pendingProposals[tx.Trade.ProposalID]
-				// 		if !exists { continue }
-				// 		if creatorID.String() != proposal.TargetID { continue }
-				// 		proposerOwnsBook := bookOwnership[proposal.ProposerBookISBN].String() == proposal.ProposerID
-				// 		targetOwnsBook := bookOwnership[proposal.TargetBookISBN].String() == proposal.TargetID
-				// 		if !proposerOwnsBook || !targetOwnsBook { continue }
-				// 		proposerPeerID, _ := peer.Decode(proposal.ProposerID)
-				// 		targetPeerID, _ := peer.Decode(proposal.TargetID)
-				// 		bookOwnership[proposal.TargetBookISBN] = proposerPeerID
-				// 		bookOwnership[proposal.ProposerBookISBN] = targetPeerID
-				// 		delete(pendingProposals, tx.Trade.ProposalID)
-				// 	}
-				// }
-
-				// b.WriteString("\n[Available Books]\n")
-				// if len(bookOwnership) == 0 { b.WriteString("No books registered on the ledger.\n") }
-				// for isbn, ownerID := range bookOwnership {
-				// 	book := bookRegistry[isbn]
-				// 	b.WriteString(fmt.Sprintf("- Title: %-30s | Author: %-20s | ISBN: %-20s | Owner: %s\n",
-				// 		book.Title, book.Author, book.ISBN, ownerID.ShortString()))
-				// }
-
-				// // fmt.Println("\n[Pending Trade Proposals]")
-				// b.WriteString("\n[Pending Trade Proposals]\n")
-
-				// if len(pendingProposals) == 0 { b.WriteString("No pending proposals.\n") }
-				// for id, proposal := range pendingProposals {
-				// 	pID, _ := peer.Decode(proposal.ProposerID)
-				// 	tID, _ := peer.Decode(proposal.TargetID)
-				// 	b.WriteString(fmt.Sprintf("- ID: %s | Offer: %s's book (%s) for %s's book (%s)\n",
-				// 		id, pID.ShortString(), proposal.ProposerBookISBN, tID.ShortString(), proposal.TargetBookISBN))
-				// }
-				// b.WriteString("--------------------")
-				// safePrint(b.String())
 
 				var b strings.Builder
 				b.WriteString("\n--- Ledger State ---\n")
@@ -279,6 +219,11 @@ func runCLI(ctx context.Context, node host.Host, topic *pubsub.Topic, privKey cr
 				bookOwnership := make(map[string]peer.ID)
 				pendingProposals := make(map[string]TradeProposal)
 
+				reputation := make(map[peer.ID]int)
+				// --- NEW: Define the timeout for stale proposals ---
+				const staleProposalTimeout = 7 * 24 * time.Hour // 7 days
+
+
 				for _, block := range chainCopy {
 					if block.Index == 0 { continue }
 					var tx Transaction
@@ -287,41 +232,71 @@ func runCLI(ctx context.Context, node host.Host, topic *pubsub.Topic, privKey cr
 					creatorID, err := peer.IDFromPublicKey(block.CreatorPubKey)
 					if err != nil { continue }
 
+					if _, exists := reputation[creatorID]; !exists {
+						reputation[creatorID] = 0 // Start everyone at 0
+					}
+
 					switch tx.Type {
 					case "REGISTER_BOOK":
 						bookRegistry[tx.Book.ISBN] = tx.Book
 						bookOwnership[tx.Book.ISBN] = creatorID
 					case "PROPOSE_TRADE":
+						proposerID, _ := peer.Decode(tx.Trade.ProposerID)
+						targetID, _ := peer.Decode(tx.Trade.TargetID)
+						if _, exists := reputation[proposerID]; !exists {
+							reputation[proposerID] = 0
+						}
+						if _, exists := reputation[targetID]; !exists {
+							reputation[targetID] = 0
+						}
 						pendingProposals[tx.Trade.ProposalID] = tx.Trade
 					case "CONFIRM_TRADE":
-						// --- THE FIX IS HERE ---
-						// Use the correct field: tx.ProposalID
-						proposal, exists := pendingProposals[tx.ProposalID]
-						if !exists { continue } // Proposal not found or already completed.
 
-						// 1. Validate: Is the peer confirming the trade the one it was offered to?
+						proposal, exists := pendingProposals[tx.ProposalID]
+						if !exists { continue }
+
 						if creatorID.String() != proposal.TargetID { continue }
 						
-						// 2. Validate: Do both parties currently own the books they are offering?
 						proposerOwnsBook := bookOwnership[proposal.ProposerBookISBN].String() == proposal.ProposerID
 						targetOwnsBook := bookOwnership[proposal.TargetBookISBN].String() == proposal.TargetID
 						if !proposerOwnsBook || !targetOwnsBook { continue }
 						
-						// 3. Execute Swap: All checks passed.
 						proposerPeerID, _ := peer.Decode(proposal.ProposerID)
 						targetPeerID, _ := peer.Decode(proposal.TargetID)
+						
+						// --- NEW: Update reputation on successful trade ---
+						reputation[proposerPeerID] += 2
+						reputation[targetPeerID] += 2
+						
 						bookOwnership[proposal.TargetBookISBN] = proposerPeerID
 						bookOwnership[proposal.ProposerBookISBN] = targetPeerID
 
-						// 4. Clean up: Mark proposal as completed.
-						// --- THE FIX IS HERE ---
-						// Use the correct field: tx.ProposalID
 						delete(pendingProposals, tx.ProposalID)
 					}
 				}
 
-				// --- This printing logic is correct and does not need to change ---
+				for _, proposal := range pendingProposals {
+					// We need the original block's timestamp to check if it's stale.
+					// This requires a slightly more complex lookup. Let's find the proposal block.
+					var proposalBlockTimestamp time.Time
+					for _, block := range chainCopy {
+						var tx Transaction
+						_ = json.Unmarshal([]byte(block.Data), &tx)
+						if tx.Type == "PROPOSE_TRADE" && tx.Trade.ProposalID == proposal.ProposalID {
+							proposalBlockTimestamp, _ = time.Parse(time.RFC3339, block.Timestamp)
+							break
+						}
+					}
+	
+					if !proposalBlockTimestamp.IsZero() && time.Since(proposalBlockTimestamp) > staleProposalTimeout {
+						proposerID, _ := peer.Decode(proposal.ProposerID)
+						reputation[proposerID] -= 1
+					}
+				}
+
 				b.WriteString("\n[Available Books]\n")
+				b.WriteString("\n[Pending Trade Proposals]\n")
+				
 				if len(bookOwnership) == 0 { b.WriteString("No books registered on the ledger.\n") }
 				for isbn, ownerID := range bookOwnership {
 					book := bookRegistry[isbn]
@@ -337,6 +312,15 @@ func runCLI(ctx context.Context, node host.Host, topic *pubsub.Topic, privKey cr
 					b.WriteString(fmt.Sprintf("- ID: %s | Offer: %s's book (%s) for %s's book (%s)\n",
 						id, pID.ShortString(), proposal.ProposerBookISBN, tID.ShortString(), proposal.TargetBookISBN))
 				}
+
+				b.WriteString("\n[Peer Reputations]\n")
+				if len(reputation) == 0 {
+					b.WriteString("No peer activity recorded yet.\n")
+				}
+				for peerID, score := range reputation {
+					b.WriteString(fmt.Sprintf("- Peer: %-20s | Score: %d\n", peerID.ShortString(), score))
+				}
+				
 				b.WriteString("--------------------")
 				safePrint(b.String())
 			
