@@ -117,15 +117,6 @@ func runCLI(ctx context.Context, node host.Host, topic *pubsub.Topic, privKey cr
 				continue
 			}
 
-			// Create a book record with the node's own ID as the owner
-			// book := Book{
-			// 	Owner:     node.ID(),
-			// 	ISBN:      bookDetails[0],
-			// 	Title:     bookDetails[1],
-			// 	Author:    bookDetails[2],
-			// 	Timestamp: time.Now(),
-			// }
-
 			transaction := Transaction{
 				Type: "REGISTER_BOOK",
 				Book: Book{
@@ -182,40 +173,6 @@ func runCLI(ctx context.Context, node host.Host, topic *pubsub.Topic, privKey cr
 				continue
 			}
 			fmt.Println("Block announcement published to the network!")
-
-			// // 4. Publish the block to the network
-			// blockBytes, err := json.Marshal(serializable)
-			// if err != nil {
-			// 	fmt.Println("Error marshaling block:", err)
-			// 	continue
-			// }
-			// if err := topic.Publish(ctx, blockBytes); err != nil {
-			// 	fmt.Println("Error publishing block:", err)
-			// 	continue
-			// }
-			// fmt.Println("Block published to the network!")
-
-			// // // Marshal the book data to JSON and publish it on the topic
-			// // bookBytes, err := book.Marshal()
-			// // if err != nil {
-			// // 	fmt.Println("Error marshaling book:", err)
-			// // 	continue
-			// // }
-			// // if err := topic.Publish(ctx, bookBytes); err != nil {
-			// // 	fmt.Println("Error publishing book:", err)
-			// // 	continue
-			// // }
-			// // fmt.Println("Book published to the network!")
-
-		// case "view":
-		// 	fmt.Println("--- Local Book Registry ---")
-		// 	if len(bookRegistry) == 0 {
-		// 		fmt.Println("No books found yet.")
-		// 	}
-		// 	for _, book := range bookRegistry {
-		// 		fmt.Printf("- Title: %s, Author: %s, ISBN: %s (Owner: %s)\n", book.Title, book.Author, book.ISBN, book.Owner.ShortString())
-		// 	}
-		// 	fmt.Println("-------------------------")
 
 		case "view":
 			fmt.Println("--- Current State from Ledger ---")
