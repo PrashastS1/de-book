@@ -11,11 +11,6 @@ type Book struct {
 	Author    string    `json:"author"` // Example field
 }
 
-type Transaction struct {
-	Type string `json:"type"` // e.g., "REGISTER_BOOK"
-	Book Book   `json:"book"`
-}
-
 type TradeProposal struct {
 	ProposerID  string `json:"proposerId"`
 	ProposerBookISBN string `json:"proposerBookIsbn"`
