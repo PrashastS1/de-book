@@ -174,12 +174,44 @@ func runCLI(ctx context.Context, node host.Host, topic *pubsub.Topic, privKey cr
 		switch command {
 
 			case "list":
-				if len(parts) != 4 {
-					safePrint("Usage: list <ISBN> <Title> <Author>")
-				} else {
-					transaction := Transaction{Type: "REGISTER_BOOK", Book: Book{ISBN: parts[1], Title: parts[2], Author: parts[3]}}
-					publishBlock(transaction)
+				// if len(parts) != 4 {
+				// 	safePrint("Usage: list <ISBN> <Title> <Author>")
+				// } else {
+				// 	transaction := Transaction{Type: "REGISTER_BOOK", Book: Book{ISBN: parts[1], Title: parts[2], Author: parts[3]}}
+				// 	publishBlock(transaction)
+				// }
+
+				if len(parts) < 4 || len(parts) > 5 {
+					safePrint("Usage: list <ISBN> <Title> <Author> [optional_image_path]")
+					break // Use break instead of continue to avoid double prompt
 				}
+				
+				book := Book{
+					ISBN:   parts[1],
+					Title:  parts[2],
+					Author: parts[3],
+				}
+				
+				// --- NEW IPFS LOGIC ---
+				// Check if an image path was provided
+				if len(parts) == 5 {
+					imagePath := parts[4]
+					safePrint("Adding cover image %s to IPFS...", imagePath)
+					cid, err := addFileToIPFS(imagePath)
+					if err != nil {
+						safePrint("Could not add file to IPFS: %v. Proceeding without cover.", err)
+						// We can continue without the cover, or stop. Let's continue.
+					} else {
+						book.CoverCID = cid
+						safePrint("Successfully added cover to IPFS. CID: %s", cid)
+					}
+				}
+	
+				transaction := Transaction{
+					Type: "REGISTER_BOOK",
+					Book: book, // Use the book object which may or may not have a CID
+				}
+				publishBlock(transaction)
 
 			case "propose":
 				if len(parts) != 4 {
@@ -297,10 +329,18 @@ func runCLI(ctx context.Context, node host.Host, topic *pubsub.Topic, privKey cr
 				b.WriteString("\n[Available Books]\n")
 				
 				if len(bookOwnership) == 0 { b.WriteString("No books registered on the ledger.\n") }
+
 				for isbn, ownerID := range bookOwnership {
 					book := bookRegistry[isbn]
-					b.WriteString(fmt.Sprintf("- Title: %-30s | Author: %-20s | ISBN: %-20s | Owner: %s\n",
-						book.Title, book.Author, book.ISBN, ownerID.ShortString()))
+					coverInfo := "No cover"
+
+					if book.CoverCID != "" {
+						// This creates a clickable link to the public IPFS gateway
+						coverInfo = fmt.Sprintf("Cover: https://ipfs.io/ipfs/%s", book.CoverCID)
+					}
+
+					b.WriteString(fmt.Sprintf("- Title: %-20s | Author: %-15s | ISBN: %-15s | Owner: %s\n", book.Title, book.Author, book.ISBN, ownerID.ShortString()))
+					b.WriteString(fmt.Sprintf("    %s\n", coverInfo))
 				}
 
 				b.WriteString("\n[Pending Trade Proposals]\n")

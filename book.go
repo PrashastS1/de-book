@@ -9,6 +9,7 @@ type Book struct {
 	ISBN      string    `json:"isbn"`
 	Title     string    `json:"title"` // Example field
 	Author    string    `json:"author"` // Example field
+	CoverCID  string `json:"coverCid,omitempty"`
 }
 
 type TradeProposal struct {
