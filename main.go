@@ -295,7 +295,6 @@ func runCLI(ctx context.Context, node host.Host, topic *pubsub.Topic, privKey cr
 				}
 
 				b.WriteString("\n[Available Books]\n")
-				b.WriteString("\n[Pending Trade Proposals]\n")
 				
 				if len(bookOwnership) == 0 { b.WriteString("No books registered on the ledger.\n") }
 				for isbn, ownerID := range bookOwnership {

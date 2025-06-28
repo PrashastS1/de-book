@@ -103,37 +103,38 @@ func (b *Block) verifySignature() (bool, error) {
 	return b.CreatorPubKey.Verify([]byte(hash), b.Signature)
 }
 
-func isBlockValid(newBlock, oldBlock Block) bool {
-	if oldBlock.Index+1 != newBlock.Index {
-		fmt.Println("Invalid index")
-		return false
-	}
-	if oldBlock.Hash != newBlock.PrevHash {
-		fmt.Println("Invalid previous hash")
-		return false
-	}
-	if newBlock.calculateHash() != newBlock.Hash {
-		fmt.Println("Invalid hash")
-		return false
-	}
+// func isBlockValid(newBlock, oldBlock Block) bool {
+// 	if oldBlock.Index+1 != newBlock.Index {
+// 		fmt.Println("Invalid index")
+// 		return false
+// 	}
+// 	if oldBlock.Hash != newBlock.PrevHash {
+// 		fmt.Println("Invalid previous hash")
+// 		return false
+// 	}
+// 	if newBlock.calculateHash() != newBlock.Hash {
+// 		fmt.Println("Invalid hash")
+// 		return false
+// 	}
 
-	if newBlock.Index > 0 {
-		valid, err := newBlock.verifySignature()
-		if err != nil || !valid {
-			fmt.Printf("Invalid signature on block %d: %v\n", newBlock.Index, err)
-			return false
-		}
-	}
+// 	if newBlock.Index > 0 {
+// 		valid, err := newBlock.verifySignature()
+// 		if err != nil || !valid {
+// 			fmt.Printf("Invalid signature on block %d: %v\n", newBlock.Index, err)
+// 			return false
+// 		}
+// 	}
 
-	return true
-}
+// 	return true
+// }
 
 func createGenesisBlock() {
 	genesisBlock := Block{
 		Index:     0,
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: "2024-01-01T00:00:00Z", // A fixed, constant timestamp
 		Data:      "Genesis Block",
 		PrevHash:  "",
+		// Signature and CreatorPubKey are nil, as they should be.
 	}
 	genesisBlock.Hash = genesisBlock.calculateHash()
 	Blockchain = append(Blockchain, genesisBlock)
@@ -151,12 +152,12 @@ func generateBlock(privKey crypto.PrivKey, transaction Transaction) (Block, erro
 
 	newBlock := Block{
 		Index:     oldBlock.Index + 1,
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: time.Now().UTC().Format(time.RFC3339), // Use current time for new blocks
 		Data:      string(txBytes),
 		PrevHash:  oldBlock.Hash,
 	}
 	newBlock.Hash = newBlock.calculateHash()
-	
+
 	if err := newBlock.signBlock(privKey); err != nil {
 		return Block{}, err
 	}
@@ -166,20 +167,43 @@ func generateBlock(privKey crypto.PrivKey, transaction Transaction) (Block, erro
 
 
 func isChainValid(chain []Block) bool {
+	// Create a temporary Genesis Block with the exact same constant values.
 	expectedGenesis := Block{
 		Index:     0,
-		Timestamp: "2023-01-01T00:00:00Z",
+		Timestamp: "2024-01-01T00:00:00Z", // Use the same constant
 		Data:      "Genesis Block",
 		PrevHash:  "",
 	}
 	expectedGenesis.Hash = expectedGenesis.calculateHash()
 
+	// Compare the hash of the received genesis block with our expected hash.
 	if chain[0].Hash != expectedGenesis.Hash {
 		fmt.Println("Invalid Genesis Block in received chain.")
 		return false
 	}
+	
+	// The rest of the validation is the same.
 	for i := 1; i < len(chain); i++ {
 		if !isBlockValid(chain[i], chain[i-1]) {
+			return false
+		}
+	}
+	return true
+}
+
+func isBlockValid(newBlock, oldBlock Block) bool {
+	if oldBlock.Index+1 != newBlock.Index {
+		return false
+	}
+	if oldBlock.Hash != newBlock.PrevHash {
+		return false
+	}
+	if newBlock.calculateHash() != newBlock.Hash {
+		return false
+	}
+	if newBlock.Index > 0 {
+		valid, err := newBlock.verifySignature()
+		if err != nil || !valid {
 			return false
 		}
 	}
