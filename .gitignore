@@ -11,3 +11,6 @@ de-book.exe
 # Go module cache
 /vendor/
 go.sum
+
+# directories
+images
