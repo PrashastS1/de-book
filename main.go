@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
@@ -13,8 +14,10 @@ import (
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/peer"
 )
-
+const DeBookTopic = "/de-book/1.0.0"
+const DiscoveryTag = "de-book-discovery"
 const identityPath = "identity.key"
 
 func main() {
@@ -49,6 +52,9 @@ func main() {
 		panic(err)
 	}
 
+	createGenesisBlock()
+	fmt.Println("Blockchain initialized with Genesis Block.")
+
 	fmt.Println("---------------------------------")
 	fmt.Println("Node is running! Your Peer ID is:", node.ID())
 	fmt.Println("Your node is listening on addresses:")
@@ -64,7 +70,7 @@ func main() {
 	}
 
 	// --- Run the CLI ---
-	go runCLI(ctx, node, topic)
+	go runCLI(ctx, node, topic, privKey)
 
 	// --- Wait for a termination signal ---
 	sigCh := make(chan os.Signal, 1)
@@ -78,9 +84,8 @@ func main() {
 }
 
 // runCLI provides a simple command-line interface for the user.
-func runCLI(ctx context.Context, node host.Host, topic *pubsub.Topic) {
+func runCLI(ctx context.Context, node host.Host, topic *pubsub.Topic, privKey crypto.PrivKey) {
 	reader := bufio.NewReader(os.Stdin)
-	// A small delay to allow the network setup to complete before showing the prompt
 	time.Sleep(2 * time.Second)
 
 	for {
@@ -113,35 +118,150 @@ func runCLI(ctx context.Context, node host.Host, topic *pubsub.Topic) {
 			}
 
 			// Create a book record with the node's own ID as the owner
-			book := Book{
-				Owner:     node.ID(),
-				ISBN:      bookDetails[0],
-				Title:     bookDetails[1],
-				Author:    bookDetails[2],
-				Timestamp: time.Now(),
+			// book := Book{
+			// 	Owner:     node.ID(),
+			// 	ISBN:      bookDetails[0],
+			// 	Title:     bookDetails[1],
+			// 	Author:    bookDetails[2],
+			// 	Timestamp: time.Now(),
+			// }
+
+			transaction := Transaction{
+				Type: "REGISTER_BOOK",
+				Book: Book{
+					ISBN:   bookDetails[0],
+					Title:  bookDetails[1],
+					Author: bookDetails[2],
+				},
 			}
 
-			// Marshal the book data to JSON and publish it on the topic
-			bookBytes, err := book.Marshal()
+			newBlock, err := generateBlock(privKey, transaction)
 			if err != nil {
-				fmt.Println("Error marshaling book:", err)
+				fmt.Println("Error generating block:", err)
 				continue
 			}
-			if err := topic.Publish(ctx, bookBytes); err != nil {
-				fmt.Println("Error publishing book:", err)
+
+			bcMutex.Lock()
+
+			if isBlockValid(newBlock, Blockchain[len(Blockchain)-1]) {
+				Blockchain = append(Blockchain, newBlock)
+			} else {
+				fmt.Println("Generated an invalid block. Something is wrong.")
+				bcMutex.Unlock()
 				continue
 			}
-			fmt.Println("Book published to the network!")
+			bcMutex.Unlock()
+			fmt.Println("New block added to our local ledger.")
+
+			serializable, err := newBlock.toSerializable()
+			if err != nil {
+				fmt.Println("Error converting block for serialization:", err)
+				continue
+			}
+
+			payloadBytes, err := json.Marshal(serializable)
+			if err != nil {
+				fmt.Println("Error marshaling payload:", err)
+				continue
+			}
+
+			msg := Message{
+				Type:    MsgTypeAnnounceBlock,
+				Payload: payloadBytes,
+			}
+
+			msgBytes, err := msg.Marshal()
+
+			if err != nil {
+				fmt.Println("Error marshaling final message:", err)
+				continue
+			}
+
+			if err := topic.Publish(ctx, msgBytes); err != nil {
+				fmt.Println("Error publishing message:", err)
+				continue
+			}
+			fmt.Println("Block announcement published to the network!")
+
+			// // 4. Publish the block to the network
+			// blockBytes, err := json.Marshal(serializable)
+			// if err != nil {
+			// 	fmt.Println("Error marshaling block:", err)
+			// 	continue
+			// }
+			// if err := topic.Publish(ctx, blockBytes); err != nil {
+			// 	fmt.Println("Error publishing block:", err)
+			// 	continue
+			// }
+			// fmt.Println("Block published to the network!")
+
+			// // // Marshal the book data to JSON and publish it on the topic
+			// // bookBytes, err := book.Marshal()
+			// // if err != nil {
+			// // 	fmt.Println("Error marshaling book:", err)
+			// // 	continue
+			// // }
+			// // if err := topic.Publish(ctx, bookBytes); err != nil {
+			// // 	fmt.Println("Error publishing book:", err)
+			// // 	continue
+			// // }
+			// // fmt.Println("Book published to the network!")
+
+		// case "view":
+		// 	fmt.Println("--- Local Book Registry ---")
+		// 	if len(bookRegistry) == 0 {
+		// 		fmt.Println("No books found yet.")
+		// 	}
+		// 	for _, book := range bookRegistry {
+		// 		fmt.Printf("- Title: %s, Author: %s, ISBN: %s (Owner: %s)\n", book.Title, book.Author, book.ISBN, book.Owner.ShortString())
+		// 	}
+		// 	fmt.Println("-------------------------")
 
 		case "view":
-			fmt.Println("--- Local Book Registry ---")
-			if len(bookRegistry) == 0 {
-				fmt.Println("No books found yet.")
+			fmt.Println("--- Current State from Ledger ---")
+			// This is a simple state reconstruction. A real app would cache this.
+			bcMutex.Lock()
+
+			chainCopy := make([]Block, len(Blockchain))
+			copy(chainCopy, Blockchain)
+			
+			bcMutex.Unlock()
+
+			bookOwnership := make(map[string]peer.ID) // Key: ISBN, Value: Owner Peer ID
+
+			// Iterate over the blockchain to find the latest owner of each book
+			for _, block := range chainCopy {
+				if block.Index == 0 { continue } // Skip Genesis
+
+				var tx Transaction
+				if err := json.Unmarshal([]byte(block.Data), &tx); err != nil {
+					continue // Skip malformed blocks
+				}
+
+				if tx.Type == "REGISTER_BOOK" {
+					ownerID, _ := peer.IDFromPublicKey(block.CreatorPubKey)
+					bookOwnership[tx.Book.ISBN] = ownerID
+				}
+				// Later, we would add "TRADE_BOOK" logic here to update the owner
 			}
-			for _, book := range bookRegistry {
-				fmt.Printf("- Title: %s, Author: %s, ISBN: %s (Owner: %s)\n", book.Title, book.Author, book.ISBN, book.Owner.ShortString())
+
+			if len(bookOwnership) == 0 {
+				fmt.Println("No books registered on the ledger.")
 			}
-			fmt.Println("-------------------------")
+			for isbn, owner := range bookOwnership {
+				// We need to find the book details again for printing
+				var title, author string
+				for _, block := range Blockchain {
+					var tx Transaction
+					if err := json.Unmarshal([]byte(block.Data), &tx); err == nil && tx.Book.ISBN == isbn {
+						title = tx.Book.Title
+						author = tx.Book.Author
+						break
+					}
+				}
+				fmt.Printf("- Title: %s, Author: %s, ISBN: %s (Owner: %s)\n", title, author, isbn, owner.ShortString())
+			}
+			fmt.Println("---------------------------------")
 
 		case "help":
 			fmt.Println("Available commands:")
