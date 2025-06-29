@@ -9,10 +9,6 @@ This project was built to explore and solve real-world distributed systems probl
 
 ## Demo
 
-![De-Book Demo GIF](https://your-image-hosting-url/de-book-demo.gif)
-
-*To create a GIF like this, you can use a tool like [asciinema](https://asciinema.org/) combined with `asciinema2gif`, or a screen recorder like Kap or Giphy Capture.*
-
 ## Core Concepts & Technical Deep Dive
 
 This project goes far beyond a typical CRUD application by tackling several difficult distributed systems challenges.
