@@ -9,8 +9,6 @@ This project was built to explore and solve real-world distributed systems probl
 
 ## Demo
 
-**(This is where you should insert a GIF of the application in action. A great demo would show two terminals, side-by-side, performing a full trade.)**
-
 ![De-Book Demo GIF](https://your-image-hosting-url/de-book-demo.gif)
 
 *To create a GIF like this, you can use a tool like [asciinema](https://asciinema.org/) combined with `asciinema2gif`, or a screen recorder like Kap or Giphy Capture.*
