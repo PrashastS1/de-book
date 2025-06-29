@@ -3,11 +3,14 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -16,9 +19,26 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
+
 const DeBookTopic = "/de-book/1.0.0"
 const DiscoveryTag = "de-book-discovery"
 const identityPath = "identity.key"
+var printMutex = &sync.Mutex{}
+
+func safePrint(format string, args ...interface{}) {
+	printMutex.Lock()
+	defer printMutex.Unlock()
+	// Erase the current line, print the message, and redraw the prompt.
+	fmt.Printf("\r\033[K")
+	fmt.Printf(format+"\n", args...)
+	fmt.Print("> ")
+}
+
+func generateUUID() string {
+	bytes := make([]byte, 16)
+	rand.Read(bytes)
+	return hex.EncodeToString(bytes)
+}
 
 func main() {
 	// --- Identity Loading ---
@@ -64,7 +84,9 @@ func main() {
 	fmt.Println("---------------------------------")
 
 	// --- Setup Discovery and PubSub ---
-	topic, err := setupDiscoveryAndPubSub(ctx, node, kadDHT)
+	// topic, err := setupDiscoveryAndPubSub(ctx, node, kadDHT)
+	// topic, err := setupDiscoveryAndPubSub(ctx, node, kadDHT, safePrint)
+	topic, err := setupDiscoveryAndPubSub(ctx, node, kadDHT, safePrint)
 	if err != nil {
 		panic(err)
 	}
@@ -86,194 +108,275 @@ func main() {
 // runCLI provides a simple command-line interface for the user.
 func runCLI(ctx context.Context, node host.Host, topic *pubsub.Topic, privKey crypto.PrivKey) {
 	reader := bufio.NewReader(os.Stdin)
-	time.Sleep(2 * time.Second)
+	time.Sleep(1 * time.Second) // Shorter sleep
+	fmt.Print("> ")
 
 	for {
-		fmt.Print("> ")
 		input, err := reader.ReadString('\n')
 		if err != nil {
-			fmt.Println("Error reading from stdin:", err)
+			safePrint("Error reading from stdin: %v", err)
 			return
 		}
+		// input = strings.TrimSpace(input)
 		input = strings.TrimSpace(input)
 		if input == "" {
+			fmt.Print("> ")
 			continue
 		}
 
-		parts := strings.SplitN(input, " ", 2)
+		// parts := strings.SplitN(input, " ", 2)
+		parts := strings.Fields(input)
 		command := parts[0]
 
-		switch command {
-		case "list":
-			if len(parts) < 2 {
-				fmt.Println("Usage: list <ISBN> <Title> <Author>")
-				fmt.Println("Example: list 978-0321765723 TheGoProgrammingLanguage Donovan&Kernighan")
-				continue
-			}
-			bookDetails := strings.SplitN(parts[1], " ", 3)
-			if len(bookDetails) < 3 {
-				fmt.Println("Usage: list <ISBN> <Title> <Author>")
-				fmt.Println("Example: list 978-0321765723 TheGoProgrammingLanguage Donovan&Kernighan")
-				continue
-			}
-
-			// Create a book record with the node's own ID as the owner
-			// book := Book{
-			// 	Owner:     node.ID(),
-			// 	ISBN:      bookDetails[0],
-			// 	Title:     bookDetails[1],
-			// 	Author:    bookDetails[2],
-			// 	Timestamp: time.Now(),
-			// }
-
-			transaction := Transaction{
-				Type: "REGISTER_BOOK",
-				Book: Book{
-					ISBN:   bookDetails[0],
-					Title:  bookDetails[1],
-					Author: bookDetails[2],
-				},
-			}
-
-			newBlock, err := generateBlock(privKey, transaction)
+		// This helper function reduces code duplication for creating and broadcasting a block.
+		publishBlock := func(tx Transaction) {
+			newBlock, err := generateBlock(privKey, tx)
 			if err != nil {
-				fmt.Println("Error generating block:", err)
-				continue
+				safePrint("Error generating block: %v", err)
+				return
 			}
 
 			bcMutex.Lock()
-
 			if isBlockValid(newBlock, Blockchain[len(Blockchain)-1]) {
 				Blockchain = append(Blockchain, newBlock)
 			} else {
-				fmt.Println("Generated an invalid block. Something is wrong.")
+				safePrint("Generated an invalid block. Something is wrong.")
 				bcMutex.Unlock()
-				continue
+				return
 			}
 			bcMutex.Unlock()
-			fmt.Println("New block added to our local ledger.")
+			// fmt.Println("New block added to our local ledger.")
+			safePrint("New block added to our local ledger.")
 
 			serializable, err := newBlock.toSerializable()
 			if err != nil {
-				fmt.Println("Error converting block for serialization:", err)
-				continue
+				safePrint("Error converting block for serialization: %v", err)
+				return
 			}
-
 			payloadBytes, err := json.Marshal(serializable)
 			if err != nil {
-				fmt.Println("Error marshaling payload:", err)
-				continue
+				safePrint("Error marshaling payload: %v", err)
+				return
 			}
-
-			msg := Message{
-				Type:    MsgTypeAnnounceBlock,
-				Payload: payloadBytes,
-			}
-
+			msg := Message{Type: MsgTypeAnnounceBlock, Payload: payloadBytes}
 			msgBytes, err := msg.Marshal()
-
 			if err != nil {
-				fmt.Println("Error marshaling final message:", err)
-				continue
+				safePrint("Error marshaling final message: %v", err)
+				return
 			}
-
 			if err := topic.Publish(ctx, msgBytes); err != nil {
-				fmt.Println("Error publishing message:", err)
-				continue
+				safePrint("Error publishing message: %v", err)
+				return
 			}
-			fmt.Println("Block announcement published to the network!")
+			safePrint("Block announcement published to the network!")
+		}
 
-			// // 4. Publish the block to the network
-			// blockBytes, err := json.Marshal(serializable)
-			// if err != nil {
-			// 	fmt.Println("Error marshaling block:", err)
-			// 	continue
-			// }
-			// if err := topic.Publish(ctx, blockBytes); err != nil {
-			// 	fmt.Println("Error publishing block:", err)
-			// 	continue
-			// }
-			// fmt.Println("Block published to the network!")
+		switch command {
 
-			// // // Marshal the book data to JSON and publish it on the topic
-			// // bookBytes, err := book.Marshal()
-			// // if err != nil {
-			// // 	fmt.Println("Error marshaling book:", err)
-			// // 	continue
-			// // }
-			// // if err := topic.Publish(ctx, bookBytes); err != nil {
-			// // 	fmt.Println("Error publishing book:", err)
-			// // 	continue
-			// // }
-			// // fmt.Println("Book published to the network!")
+			case "list":
+				// if len(parts) != 4 {
+				// 	safePrint("Usage: list <ISBN> <Title> <Author>")
+				// } else {
+				// 	transaction := Transaction{Type: "REGISTER_BOOK", Book: Book{ISBN: parts[1], Title: parts[2], Author: parts[3]}}
+				// 	publishBlock(transaction)
+				// }
 
-		// case "view":
-		// 	fmt.Println("--- Local Book Registry ---")
-		// 	if len(bookRegistry) == 0 {
-		// 		fmt.Println("No books found yet.")
-		// 	}
-		// 	for _, book := range bookRegistry {
-		// 		fmt.Printf("- Title: %s, Author: %s, ISBN: %s (Owner: %s)\n", book.Title, book.Author, book.ISBN, book.Owner.ShortString())
-		// 	}
-		// 	fmt.Println("-------------------------")
-
-		case "view":
-			fmt.Println("--- Current State from Ledger ---")
-			// This is a simple state reconstruction. A real app would cache this.
-			bcMutex.Lock()
-
-			chainCopy := make([]Block, len(Blockchain))
-			copy(chainCopy, Blockchain)
-			
-			bcMutex.Unlock()
-
-			bookOwnership := make(map[string]peer.ID) // Key: ISBN, Value: Owner Peer ID
-
-			// Iterate over the blockchain to find the latest owner of each book
-			for _, block := range chainCopy {
-				if block.Index == 0 { continue } // Skip Genesis
-
-				var tx Transaction
-				if err := json.Unmarshal([]byte(block.Data), &tx); err != nil {
-					continue // Skip malformed blocks
+				if len(parts) < 4 || len(parts) > 5 {
+					safePrint("Usage: list <ISBN> <Title> <Author> [optional_image_path]")
+					break // Use break instead of continue to avoid double prompt
 				}
-
-				if tx.Type == "REGISTER_BOOK" {
-					ownerID, _ := peer.IDFromPublicKey(block.CreatorPubKey)
-					bookOwnership[tx.Book.ISBN] = ownerID
+				
+				book := Book{
+					ISBN:   parts[1],
+					Title:  parts[2],
+					Author: parts[3],
 				}
-				// Later, we would add "TRADE_BOOK" logic here to update the owner
-			}
-
-			if len(bookOwnership) == 0 {
-				fmt.Println("No books registered on the ledger.")
-			}
-			for isbn, owner := range bookOwnership {
-				// We need to find the book details again for printing
-				var title, author string
-				for _, block := range Blockchain {
-					var tx Transaction
-					if err := json.Unmarshal([]byte(block.Data), &tx); err == nil && tx.Book.ISBN == isbn {
-						title = tx.Book.Title
-						author = tx.Book.Author
-						break
+				
+				// --- NEW IPFS LOGIC ---
+				// Check if an image path was provided
+				if len(parts) == 5 {
+					imagePath := parts[4]
+					safePrint("Adding cover image %s to IPFS...", imagePath)
+					cid, err := addFileToIPFS(imagePath)
+					if err != nil {
+						safePrint("Could not add file to IPFS: %v. Proceeding without cover.", err)
+						// We can continue without the cover, or stop. Let's continue.
+					} else {
+						book.CoverCID = cid
+						safePrint("Successfully added cover to IPFS. CID: %s", cid)
 					}
 				}
-				fmt.Printf("- Title: %s, Author: %s, ISBN: %s (Owner: %s)\n", title, author, isbn, owner.ShortString())
+	
+				transaction := Transaction{
+					Type: "REGISTER_BOOK",
+					Book: book, // Use the book object which may or may not have a CID
+				}
+				publishBlock(transaction)
+
+			case "propose":
+				if len(parts) != 4 {
+					safePrint("Usage: propose <target_peer_id> <their_isbn> <my_isbn>")
+				} else {
+					proposal := TradeProposal{
+						ProposerID: node.ID().String(), TargetID: parts[1],
+						TargetBookISBN: parts[2], ProposerBookISBN: parts[3],
+						ProposalID: generateUUID(),
+					}
+					transaction := Transaction{Type: "PROPOSE_TRADE", Trade: proposal}
+					publishBlock(transaction)
+					safePrint("Trade proposal published. Proposal ID: %s", proposal.ProposalID)
+				}
+
+			case "accept":
+				
+				if len(parts) != 2 {
+					safePrint("Usage: accept <proposal_id>")
+				} else {
+					transaction := Transaction{Type: "CONFIRM_TRADE", ProposalID: parts[1]}
+					publishBlock(transaction)
+					safePrint("Trade confirmation published for proposal: %s", parts[1])
+				}
+
+			case "view":
+
+				var b strings.Builder
+				b.WriteString("\n--- Ledger State ---\n")
+
+				bcMutex.Lock()
+				chainCopy := make([]Block, len(Blockchain))
+				copy(chainCopy, Blockchain)
+				bcMutex.Unlock()
+
+				bookRegistry := make(map[string]Book)
+				bookOwnership := make(map[string]peer.ID)
+				pendingProposals := make(map[string]TradeProposal)
+
+				reputation := make(map[peer.ID]int)
+				// --- NEW: Define the timeout for stale proposals ---
+				const staleProposalTimeout = 7 * 24 * time.Hour // 7 days
+
+
+				for _, block := range chainCopy {
+					if block.Index == 0 { continue }
+					var tx Transaction
+					if err := json.Unmarshal([]byte(block.Data), &tx); err != nil { continue }
+					if block.CreatorPubKey == nil { continue }
+					creatorID, err := peer.IDFromPublicKey(block.CreatorPubKey)
+					if err != nil { continue }
+
+					if _, exists := reputation[creatorID]; !exists {
+						reputation[creatorID] = 0 // Start everyone at 0
+					}
+
+					switch tx.Type {
+					case "REGISTER_BOOK":
+						bookRegistry[tx.Book.ISBN] = tx.Book
+						bookOwnership[tx.Book.ISBN] = creatorID
+					case "PROPOSE_TRADE":
+						proposerID, _ := peer.Decode(tx.Trade.ProposerID)
+						targetID, _ := peer.Decode(tx.Trade.TargetID)
+						if _, exists := reputation[proposerID]; !exists {
+							reputation[proposerID] = 0
+						}
+						if _, exists := reputation[targetID]; !exists {
+							reputation[targetID] = 0
+						}
+						pendingProposals[tx.Trade.ProposalID] = tx.Trade
+					case "CONFIRM_TRADE":
+
+						proposal, exists := pendingProposals[tx.ProposalID]
+						if !exists { continue }
+
+						if creatorID.String() != proposal.TargetID { continue }
+						
+						proposerOwnsBook := bookOwnership[proposal.ProposerBookISBN].String() == proposal.ProposerID
+						targetOwnsBook := bookOwnership[proposal.TargetBookISBN].String() == proposal.TargetID
+						if !proposerOwnsBook || !targetOwnsBook { continue }
+						
+						proposerPeerID, _ := peer.Decode(proposal.ProposerID)
+						targetPeerID, _ := peer.Decode(proposal.TargetID)
+						
+						// --- NEW: Update reputation on successful trade ---
+						reputation[proposerPeerID] += 2
+						reputation[targetPeerID] += 2
+						
+						bookOwnership[proposal.TargetBookISBN] = proposerPeerID
+						bookOwnership[proposal.ProposerBookISBN] = targetPeerID
+
+						delete(pendingProposals, tx.ProposalID)
+					}
+				}
+
+				for _, proposal := range pendingProposals {
+					// We need the original block's timestamp to check if it's stale.
+					// This requires a slightly more complex lookup. Let's find the proposal block.
+					var proposalBlockTimestamp time.Time
+					for _, block := range chainCopy {
+						var tx Transaction
+						_ = json.Unmarshal([]byte(block.Data), &tx)
+						if tx.Type == "PROPOSE_TRADE" && tx.Trade.ProposalID == proposal.ProposalID {
+							proposalBlockTimestamp, _ = time.Parse(time.RFC3339, block.Timestamp)
+							break
+						}
+					}
+	
+					if !proposalBlockTimestamp.IsZero() && time.Since(proposalBlockTimestamp) > staleProposalTimeout {
+						proposerID, _ := peer.Decode(proposal.ProposerID)
+						reputation[proposerID] -= 1
+					}
+				}
+
+				b.WriteString("\n[Available Books]\n")
+				
+				if len(bookOwnership) == 0 { b.WriteString("No books registered on the ledger.\n") }
+
+				for isbn, ownerID := range bookOwnership {
+					book := bookRegistry[isbn]
+					coverInfo := "No cover"
+
+					if book.CoverCID != "" {
+						// This creates a clickable link to the public IPFS gateway
+						coverInfo = fmt.Sprintf("Cover: https://ipfs.io/ipfs/%s", book.CoverCID)
+					}
+
+					b.WriteString(fmt.Sprintf("- Title: %-20s | Author: %-15s | ISBN: %-15s | Owner: %s\n", book.Title, book.Author, book.ISBN, ownerID.ShortString()))
+					b.WriteString(fmt.Sprintf("    %s\n", coverInfo))
+				}
+
+				b.WriteString("\n[Pending Trade Proposals]\n")
+				if len(pendingProposals) == 0 { b.WriteString("No pending proposals.\n") }
+				for id, proposal := range pendingProposals {
+					pID, _ := peer.Decode(proposal.ProposerID)
+					tID, _ := peer.Decode(proposal.TargetID)
+					b.WriteString(fmt.Sprintf("- ID: %s | Offer: %s's book (%s) for %s's book (%s)\n",
+						id, pID.ShortString(), proposal.ProposerBookISBN, tID.ShortString(), proposal.TargetBookISBN))
+				}
+
+				b.WriteString("\n[Peer Reputations]\n")
+				if len(reputation) == 0 {
+					b.WriteString("No peer activity recorded yet.\n")
+				}
+				for peerID, score := range reputation {
+					b.WriteString(fmt.Sprintf("- Peer: %-20s | Score: %d\n", peerID.ShortString(), score))
+				}
+				
+				b.WriteString("--------------------")
+				safePrint(b.String())
+			
+			case "help":
+				fmt.Println("Available commands:")
+				fmt.Println("  list <ISBN> <Title> <Author>   - Register a book you own.")
+				fmt.Println("  propose <PeerID> <TheirISBN> <MyISBN> - Propose a trade.")
+				fmt.Println("  accept <ProposalID>            - Accept a proposed trade.")
+				fmt.Println("  view                         - View the current state of all books and trades.")
+				fmt.Println("  exit                         - Shut down the application.")
+
+			case "exit":
+				fmt.Println("To exit, please press Ctrl+C.")
+
+			default:
+				fmt.Println("Unknown command. Type 'help' for a list of commands.")
 			}
-			fmt.Println("---------------------------------")
-
-		case "help":
-			fmt.Println("Available commands:")
-			fmt.Println("  list <ISBN> <Title> <Author> - List a new book for exchange.")
-			fmt.Println("  view                       - View all books discovered on the network.")
-			fmt.Println("  exit                       - Shut down the application.")
-
-		case "exit":
-			fmt.Println("To exit, please press Ctrl+C.")
-
-		default:
-			fmt.Println("Unknown command. Type 'help' for a list of commands.")
-		}
+		fmt.Print("> ")
 	}
 }
