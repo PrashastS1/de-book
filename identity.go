@@ -56,7 +56,3 @@ func loadPrivateKey(path string) (crypto.PrivKey, error) {
 	}
 	return privKey, nil
 }
-
-// THIS FUNCTION IS NO LONGER NEEDED with the simpler save/load logic.
-// The old x509 logic was overly complex. We can remove it.
-// The new savePrivateKey and loadPrivateKey work directly with libp2p's marshaling.
